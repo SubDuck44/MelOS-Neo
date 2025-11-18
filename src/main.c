@@ -122,7 +122,7 @@ void Sys_Draw(void) {
             (Vector2){0.0f, 0.0f},
             (Vector2){RenderComponents.resolution.x, RenderComponents.resolution.y},
             30.0f,
-            true,
+            false,
             "MeLOS Neo",
             WHITE
         );
@@ -225,13 +225,15 @@ int main(void) {
 
 Rectangle DrawTab(Vector2 position, Vector2 size, float bar_size, bool bar_top, const char* tab_text, Color color) {
     float offset_y = 0.0f;
+    float other_offset_y = 0.0f; // What am i even doing anymore
     DrawRectangleLinesEx((Rectangle){position.x, position.y, size.x, size.y}, 5, color);
     if (!bar_top) {
-        offset_y = bar_size + 6;
+        offset_y = size.y - bar_size;
+        other_offset_y = size.y - (bar_size * 2);
     }
     DrawLineEx(
-        (Vector2){position.x, position.y + bar_size + offset_y},
-        (Vector2){position.x + size.x, position.y + bar_size + offset_y},
+        (Vector2){position.x, position.y + bar_size + other_offset_y},
+        (Vector2){position.x + size.x, position.y + bar_size + other_offset_y},
         5.0f,
         color
     );
