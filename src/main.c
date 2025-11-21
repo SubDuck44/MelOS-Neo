@@ -1,271 +1,157 @@
 #include "raylib.h"
 #include <stdlib.h>
+#define MELGRAY (Color){53, 53, 53, 255}
+#define DEBUG
+#define DEFAULTRES_X 1280.0f
+#define DEFAULTRES_Y 720.0f
 
-const char* err_memalloc = "Heap allocation failed";
-
-enum CallbackTypes {
-    CALLBACK_EVENT,
-    CALLBACK_MODULE
+enum Errors {
+  ERROR_MEMALLOC,
+  ERROR_INVALIDCLASSTYPE
 };
+enum Classes {
+  CLASS_SHELL
+}; // Yes, im using classes in C. What about it?
 
-typedef void(*Function)(void);
-typedef void(*Method)(unsigned, void*);
-
+typedef void(*Method)(void *data, int index);
 typedef struct {
-    int x;
-    int y;
-} Vector2i;
-
+  void *data;
+  enum Classes type;
+} Instance;
 typedef struct {
-    Function call;
-    void* data;
-} EventCallback;
-
+  Instance *queue;
+  int length;
+  int capacity;
+} CallbackQueue;
 typedef struct {
-    Method update;
-    Method draw;
-    void* data;
-} ModuleCallback;
+  RenderTexture2D canvas;
+  Vector2 size; // Display size (how large the windows is)
+  Vector2 resolution; // Display resolution (how many pixels are rendered and projected onto the size)
+} Canvas;
 
-struct Sys_Eventqueue {
-    EventCallback* queue;
-    unsigned capacity;
-    unsigned occupancy;
+struct Runtime {
+  Canvas super_canvas;
+  CallbackQueue processes;
+  bool should_program_run;
+  bool queue_redraw;
+  short render_speed; // How many times a second the super_canvas should be drawn to SCREEN, NOT REDRAW ITS CHILDREN
+} Runtime = {
+  .should_program_run = true,
+  .queue_redraw = true,
+  .render_speed = 30
 };
 
-struct Sys_ModuleQueue {
-    ModuleCallback* queue;
-    unsigned capacity;
-    unsigned occupancy;
-};
-
-struct System {
-    char run;
-    struct Sys_Eventqueue ev_queue;
-    struct Sys_ModuleQueue mod_queue;
-    char queue_redraw;
-} System = {
-    .run = true,
-    .ev_queue = {NULL, 5, 0},
-    .mod_queue = {NULL, 5, 0},
-    .queue_redraw = true
-};
-
-struct RenderComponents {
-    RenderTexture2D viewport;
-    unsigned short render_speed;
-    Vector2i resolution;
-    Vector2 master_size;
-    Font default_font;
-    float default_font_spacing;
-} RenderComponents = {
-    .viewport = {0},
-    .resolution = (Vector2i){1280, 720},
-    .master_size = (Vector2){1280, 720},
-    .render_speed = 30,
-    .default_font = {0},
-    .default_font_spacing = 2
-};
-
-struct Keymap {
-    int modifier;
-    int force_quit;
-    int toggle_fullscreen;
-} Keymap = {
-    .modifier = KEY_LEFT_SHIFT,
-    .force_quit = KEY_ESCAPE,
-    .toggle_fullscreen = KEY_F11
-};
-
-/* FORWARD DECLERATIONS BEGIN */
-Rectangle DrawTab(Vector2 position, Vector2 size, float bar_size, bool bar_top, const char* tab_text, Color color);
-/* FORWARD DECLERATIONS END */
-
-void Sys_Init(void) {
-    SetConfigFlags(FLAG_WINDOW_TRANSPARENT);
-    SetConfigFlags(FLAG_WINDOW_UNDECORATED);
-    ChangeDirectory("..");
-    InitWindow(RenderComponents.master_size.x, RenderComponents.master_size.y, "Terminal");
-    SetTargetFPS(RenderComponents.render_speed);
-    System.ev_queue.queue = malloc(sizeof(EventCallback) * 5);
-    System.mod_queue.queue = malloc(sizeof(ModuleCallback) * 5);
-    RenderComponents.viewport = LoadRenderTexture(RenderComponents.resolution.x, RenderComponents.resolution.y);
-    RenderComponents.default_font = LoadFont("res/iosevka-regular.ttf");
+void ThrowError(const enum Errors type) {
+#ifdef DEBUG
+  switch (type) {
+    case ERROR_MEMALLOC:
+      TraceLog(LOG_FATAL, "Failed to allocate memory");
+      Runtime.should_program_run = false;
+      break;
+    case ERROR_INVALIDCLASSTYPE:
+      TraceLog(LOG_ERROR, "Invalid class type");
+      break;
+    default:
+  }
+#else
+  ;
+#endif
 }
-void Sys_Terminate(void) {
-    UnloadRenderTexture(RenderComponents.viewport);
-    UnloadFont(RenderComponents.default_font);
-    CloseWindow();
-}
-void Sys_Update(void) {
-    int key_input = GetKeyPressed();
-    if (key_input) {
-        if (IsKeyDown(Keymap.modifier)) {
-            if (key_input == Keymap.force_quit) System.run = false;
-            if (key_input == Keymap.toggle_fullscreen) ToggleBorderlessWindowed();
-        } else {
-            if (key_input == Keymap.toggle_fullscreen) ToggleFullscreen();
-        }
+
+int QueueFree(int index) {
+  Instance *target = &Runtime.processes.queue[index];
+  if (target->data != nullptr) free(target->data);
+  if (index != Runtime.processes.length - 1) {
+    Runtime.processes.queue[index] = Runtime.processes.queue[Runtime.processes.length - 1];
+  }
+  Runtime.processes.length--;
+  if (Runtime.processes.length <= Runtime.processes.capacity - 5) {
+    Instance* temp = realloc(Runtime.processes.queue, sizeof(Instance) * (Runtime.processes.capacity - 5));
+    if (!temp) {
+      ThrowError(ERROR_MEMALLOC);
+      return -1;
     }
-    for (unsigned index = 0; index < System.ev_queue.occupancy; index++) {
-        System.ev_queue.queue[index].call();
-    }
-    for (unsigned index = 0; index < System.mod_queue.occupancy; index++) {
-        System.mod_queue.queue[index].update(index, System.mod_queue.queue[index].data);
-    }
+    Runtime.processes.queue = temp;
+    Runtime.processes.capacity -= 5;
+  }
+  return Runtime.processes.length;
 }
-
-void Sys_Draw(void) {
-    BeginTextureMode(RenderComponents.viewport);
-    ClearBackground(BLANK);
-        DrawTab(
-            (Vector2){0.0f, 0.0f},
-            (Vector2){RenderComponents.resolution.x, RenderComponents.resolution.y},
-            30.0f,
-            false,
-            "MeLOS Neo",
-            WHITE
-        );
-        for (unsigned index = 0; index < System.mod_queue.occupancy; index++) {
-            System.mod_queue.queue[index].draw(index, System.mod_queue.queue[index].data);
-        }
-    EndTextureMode();
+void OnInit(void) {
+  Runtime.super_canvas = (Canvas){
+    .canvas = {0},
+    .size = (Vector2){DEFAULTRES_X, DEFAULTRES_Y},
+    .resolution = (Vector2){DEFAULTRES_X, DEFAULTRES_Y}
+  };
+  Runtime.processes = (CallbackQueue){
+    .queue = malloc(sizeof(Instance) * 5),
+    .capacity = 5,
+    .length = 0
+  };
+  SetConfigFlags(FLAG_MSAA_4X_HINT);
+  SetConfigFlags(FLAG_WINDOW_UNDECORATED);
+  InitWindow((int)Runtime.super_canvas.size.x, (int)Runtime.super_canvas.size.y, "MelOS Neo");
+  SetTargetFPS(Runtime.render_speed);
+  LoadRenderTexture((int)Runtime.super_canvas.resolution.x, (int)Runtime.super_canvas.resolution.y);
 }
-
-void Sys_Instantiate(int type, Method update, Method draw, Function call, void* data) {
-    switch (type) {
-        case CALLBACK_EVENT:
-            if (System.ev_queue.occupancy + 1 > System.ev_queue.capacity) {
-                EventCallback* temp = realloc(System.ev_queue.queue, sizeof(EventCallback) * (System.ev_queue.capacity + 5));
-                if (!temp) {
-                    TraceLog(LOG_FATAL, err_memalloc);
-                    return;
-                }
-                System.ev_queue.queue = temp;
-            }
-            System.ev_queue.queue[System.ev_queue.occupancy] = (EventCallback){call, data};
-            System.ev_queue.occupancy++;
-            break;
-        case CALLBACK_MODULE:
-            if (System.mod_queue.occupancy + 1 > System.ev_queue.capacity) {
-                ModuleCallback* temp = realloc(System.mod_queue.queue, sizeof(ModuleCallback) * (System.ev_queue.capacity + 5));
-                if (!temp) {
-                    TraceLog(LOG_FATAL, err_memalloc);
-                    return;
-                }
-                System.mod_queue.queue = temp;
-            }
-            System.mod_queue.queue[System.mod_queue.occupancy] = (ModuleCallback){update, draw, data};
-            System.mod_queue.occupancy++;
-            break;
-        default:
-            return;
+// Runs all process callbacks
+void OnProcess(void) {
+  if (IsKeyPressed(KEY_ESCAPE) && IsKeyDown(KEY_LEFT_SHIFT)) Runtime.should_program_run = false;
+  for (int index = 0; index < Runtime.processes.length; index++) {
+    switch (Runtime.processes.queue[index].type) {
+      default:
+        ThrowError(ERROR_INVALIDCLASSTYPE);
+        QueueFree(index);
     }
+  }
 }
-
-void Sys_Kill(int type, unsigned index) {
-    switch (type) {
-        case CALLBACK_EVENT:
-            EventCallback* current1 = &System.ev_queue.queue[index];
-            if (current1->data) free(current1->data);
-            if (index != System.ev_queue.occupancy - 1) System.ev_queue.queue[index] = System.ev_queue.queue[System.ev_queue.occupancy - 1];
-            System.ev_queue.occupancy--;
-            if (System.ev_queue.occupancy <= System.ev_queue.capacity - 5) {
-                EventCallback* temp = realloc(System.ev_queue.queue, sizeof(EventCallback) * System.ev_queue.capacity - 5);
-                if (!temp) {
-                    TraceLog(LOG_FATAL, err_memalloc);
-                    return;
-                }
-                System.ev_queue.queue = temp;
-            }
-            break;
-        case CALLBACK_MODULE:
-            ModuleCallback* current2 = &System.mod_queue.queue[index];
-            if (current2->data) free(current2->data);
-            if (index != System.mod_queue.occupancy - 1) System.mod_queue.queue[index] = System.mod_queue.queue[System.mod_queue.occupancy - 1];
-            System.mod_queue.occupancy--;
-            if (System.mod_queue.occupancy <= System.mod_queue.capacity - 5) {
-                ModuleCallback* temp = realloc(System.mod_queue.queue, sizeof(ModuleCallback) * System.mod_queue.capacity - 5);
-                if (!temp) {
-                    TraceLog(LOG_FATAL, err_memalloc);
-                    return;
-                }
-                System.mod_queue.queue = temp;
-            }
-            break;
-        default:
-            return;
+// Draws all callbacks linked to a certain canvas
+void RedrawCanvas(void) {
+  BeginTextureMode(Runtime.super_canvas.canvas);
+  ClearBackground(MELGRAY);
+  for (int index = 0; index < Runtime.processes.length; index++) {
+    switch (Runtime.processes.queue[index].type) {
+      default:
+        ThrowError(ERROR_INVALIDCLASSTYPE);
+        QueueFree(index);
     }
+  }
+  EndTextureMode();
 }
-// ### MAIN ###
+// Close the program
+void OnExit(void) {
+  UnloadRenderTexture(Runtime.super_canvas.canvas);
+  CloseWindow();
+}
+int Instantiate(enum Classes type, void *data) {
+  if (Runtime.processes.capacity < Runtime.processes.length + 1) {
+    Instance *temp = realloc(Runtime.processes.queue, sizeof(Instance) * (Runtime.processes.capacity + 5));
+    if (!temp) {
+      ThrowError(ERROR_MEMALLOC);
+      return -1;
+    }
+    Runtime.processes.queue = temp;
+    Runtime.processes.capacity += 5;
+  }
+  Runtime.processes.queue[Runtime.processes.length] = (Instance){data, CLASS_SHELL};
+  Runtime.processes.length++;
+  return Runtime.processes.length - 1;
+}
 int main(void) {
-    Sys_Init();
-    while (System.run) {
-        Sys_Update();
-        if (System.queue_redraw) {
-            Sys_Draw();
-            System.queue_redraw = false;
-        }
-        BeginDrawing();
-        ClearBackground(BLANK);
-        DrawTexturePro(
-            RenderComponents.viewport.texture,
-            (Rectangle){0, 0, RenderComponents.resolution.x, -RenderComponents.resolution.y},
-            (Rectangle){0, 0, RenderComponents.master_size.x, RenderComponents.master_size.y},
-            (Vector2){0, 0},
-            0.0f,
-            WHITE
-        );
-        EndDrawing();
-    }
-    Sys_Terminate();
-    return 0;
+  OnInit();
+  while (Runtime.should_program_run) {
+    OnProcess();
+    if (Runtime.queue_redraw) RedrawCanvas(); // Run all draw callbacks linked to super_canvas
+    BeginDrawing();
+      // Draws the super_canvas onto screen each frame
+      DrawTexturePro(
+        Runtime.super_canvas.canvas.texture,
+        (Rectangle){0, 0, Runtime.super_canvas.resolution.x, -Runtime.super_canvas.resolution.y},
+        (Rectangle){0, 0, Runtime.super_canvas.size.x, Runtime.super_canvas.size.y},
+        (Vector2){0.0f, 0.0f},
+        0.0f, WHITE
+      );
+    EndDrawing();
+  }
+  OnExit();
+  return 0;
 }
-// ### MAIN ###
-
-Rectangle DrawTab(Vector2 position, Vector2 size, float bar_size, bool bar_top, const char* tab_text, Color color) {
-    float offset_y = 0.0f;
-    float other_offset_y = 0.0f; // What am i even doing anymore
-    DrawRectangleLinesEx((Rectangle){position.x, position.y, size.x, size.y}, 5, color);
-    if (!bar_top) {
-        offset_y = size.y - bar_size;
-        other_offset_y = size.y - (bar_size * 2);
-    }
-    DrawLineEx(
-        (Vector2){position.x, position.y + bar_size + other_offset_y},
-        (Vector2){position.x + size.x, position.y + bar_size + other_offset_y},
-        5.0f,
-        color
-    );
-    DrawTextEx(
-        RenderComponents.default_font,
-        tab_text,
-        (Vector2){position.x + 8, position.y + 3 + offset_y},
-        bar_size - 6,
-        RenderComponents.default_font_spacing,
-        color
-    );
-    return (Rectangle){position.x + 5, position.y + 7 + bar_size, size.x - 10, size.y - 7 - bar_size};
-}
-
-// struct Mod_Terminal {
-//     Vector2 size;
-//     Vector2 position;
-// };
-// void MU_Terminal(unsigned index, void* data);
-// void MD_Terminal(unsigned index, void* data) {
-//     struct Mod_Terminal* self = data;
-//     DrawRectangleLines(
-//         self->position.x, self->position.y,
-//         self->size.x, self->size.y,
-//         WHITE
-//     );
-// }
-// void MC_Terminal(Vector2 position, Vector2 size) {
-//     struct Mod_Terminal* data = malloc(sizeof(struct Mod_Terminal));
-//     if (!data) {
-//         TraceLog(LOG_FATAL, err_memalloc);
-//         return;
-//     }
-//     Sys_Instantiate(CALLBACK_MODULE, MU_Terminal, MD_Terminal, NULL, data);
-// }
