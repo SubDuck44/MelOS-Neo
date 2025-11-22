@@ -4,6 +4,8 @@
 #define DEBUG
 #define DEFAULTRES_X 1280.0f
 #define DEFAULTRES_Y 720.0f
+#define MAXWINDOWS 5
+#define MAXTERMINALBUFFER 128
 
 enum Errors {
   ERROR_MEMALLOC,
@@ -28,6 +30,10 @@ typedef struct {
   Vector2 size; // Display size (how large the windows is)
   Vector2 resolution; // Display resolution (how many pixels are rendered and projected onto the size)
 } Canvas;
+typedef struct {
+  Rectangle area;
+  int process_index;
+} Window;
 
 struct Runtime {
   Canvas super_canvas;
@@ -39,6 +45,14 @@ struct Runtime {
   .should_program_run = true,
   .queue_redraw = true,
   .render_speed = 30
+};
+
+struct WindowManager {
+  Window *windows;
+  int length;
+} WindowManager = {
+  .windows = nullptr,
+  .length = 0
 };
 
 void ThrowError(const enum Errors type) {
@@ -58,23 +72,23 @@ void ThrowError(const enum Errors type) {
 #endif
 }
 
-int QueueFree(int index) {
-  Instance *target = &Runtime.processes.queue[index];
-  if (target->data != nullptr) free(target->data);
-  if (index != Runtime.processes.length - 1) {
-    Runtime.processes.queue[index] = Runtime.processes.queue[Runtime.processes.length - 1];
+int QueueFree(CallbackQueue *target, int index) {
+  Instance *instance = &Runtime.processes.queue[index];
+  if (instance->data != nullptr) free(instance->data);
+  if (index != target->length - 1) {
+    target->queue[index] = target->queue[target->length - 1];
   }
-  Runtime.processes.length--;
-  if (Runtime.processes.length <= Runtime.processes.capacity - 5) {
-    Instance* temp = realloc(Runtime.processes.queue, sizeof(Instance) * (Runtime.processes.capacity - 5));
+  target->length--;
+  if (target->length <= target->capacity - 5) {
+    Instance* temp = realloc(target->queue, sizeof(Instance) * (target->capacity - 5));
     if (!temp) {
       ThrowError(ERROR_MEMALLOC);
       return -1;
     }
-    Runtime.processes.queue = temp;
-    Runtime.processes.capacity -= 5;
+    target->queue = temp;
+    target->capacity -= 5;
   }
-  return Runtime.processes.length;
+  return target->length;
 }
 void OnInit(void) {
   Runtime.super_canvas = (Canvas){
@@ -87,6 +101,7 @@ void OnInit(void) {
     .capacity = 5,
     .length = 0
   };
+  WindowManager.windows = malloc(sizeof(Window) * MAXWINDOWS);
   SetConfigFlags(FLAG_MSAA_4X_HINT);
   SetConfigFlags(FLAG_WINDOW_UNDECORATED);
   InitWindow((int)Runtime.super_canvas.size.x, (int)Runtime.super_canvas.size.y, "MelOS Neo");
@@ -100,7 +115,7 @@ void OnProcess(void) {
     switch (Runtime.processes.queue[index].type) {
       default:
         ThrowError(ERROR_INVALIDCLASSTYPE);
-        QueueFree(index);
+        QueueFree(&Runtime.processes, index);
     }
   }
 }
@@ -112,7 +127,7 @@ void RedrawCanvas(void) {
     switch (Runtime.processes.queue[index].type) {
       default:
         ThrowError(ERROR_INVALIDCLASSTYPE);
-        QueueFree(index);
+        QueueFree(&Runtime.processes, index);
     }
   }
   EndTextureMode();
@@ -122,19 +137,19 @@ void OnExit(void) {
   UnloadRenderTexture(Runtime.super_canvas.canvas);
   CloseWindow();
 }
-int Instantiate(enum Classes type, void *data) {
-  if (Runtime.processes.capacity < Runtime.processes.length + 1) {
-    Instance *temp = realloc(Runtime.processes.queue, sizeof(Instance) * (Runtime.processes.capacity + 5));
+int Instantiate(CallbackQueue *target, enum Classes type, void *data) {
+  if (target->capacity < target->length + 1) {
+    Instance *temp = realloc(target->queue, sizeof(Instance) * (target->capacity + 5));
     if (!temp) {
       ThrowError(ERROR_MEMALLOC);
       return -1;
     }
-    Runtime.processes.queue = temp;
-    Runtime.processes.capacity += 5;
+    target->queue = temp;
+    target->capacity += 5;
   }
-  Runtime.processes.queue[Runtime.processes.length] = (Instance){data, CLASS_SHELL};
-  Runtime.processes.length++;
-  return Runtime.processes.length - 1;
+  target->queue[target->length] = (Instance){data, type};
+  target->length++;
+  return target->length - 1;
 }
 int main(void) {
   OnInit();
