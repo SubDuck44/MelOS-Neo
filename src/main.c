@@ -6,38 +6,41 @@
 #define DEFAULTRES_Y 720.0f
 #define MAXWINDOWS 5
 #define MAXTERMINALBUFFER 128
+#define PREALLOC_BLOCKSIZE 5
 
+enum Signals {
+  SIG_PROCESS,
+  SIG_DRAW
+};
 enum Errors {
   ERROR_MEMALLOC,
   ERROR_INVALIDCLASSTYPE
 };
-enum Classes {
-  CLASS_SHELL
-}; // Yes, im using classes in C. What about it?
 
-typedef void(*Method)(void *data, int index);
-typedef struct {
-  void *data;
-  enum Classes type;
-} Instance;
-typedef struct {
-  Instance *queue;
-  int length;
-  int capacity;
-} CallbackQueue;
+typedef void(*Method)(void *data, void* arg_buf);
 typedef struct {
   RenderTexture2D canvas;
   Vector2 size; // Display size (how large the windows is)
   Vector2 resolution; // Display resolution (how many pixels are rendered and projected onto the size)
 } Canvas;
+struct SignalSubscription {
+  Method method;
+  void* target;
+};
 typedef struct {
-  Rectangle area;
-  int process_index;
-} Window;
+  struct SignalSubscription* subscribers;
+  unsigned sub_count;
+  unsigned sub_cap;
+  void* argument_buf;
+} Signal;
 
 struct Runtime {
+  struct {
+    Signal* signals;
+    unsigned num;
+    unsigned cap;
+  } Signals;
   Canvas super_canvas;
-  CallbackQueue processes;
   bool should_program_run;
   bool queue_redraw;
   short render_speed; // How many times a second the super_canvas should be drawn to SCREEN, NOT REDRAW ITS CHILDREN
@@ -45,14 +48,6 @@ struct Runtime {
   .should_program_run = true,
   .queue_redraw = true,
   .render_speed = 30
-};
-
-struct WindowManager {
-  Window *windows;
-  int length;
-} WindowManager = {
-  .windows = nullptr,
-  .length = 0
 };
 
 void ThrowError(const enum Errors type) {
@@ -71,24 +66,88 @@ void ThrowError(const enum Errors type) {
   ;
 #endif
 }
-
-int QueueFree(CallbackQueue *target, int index) {
-  Instance *instance = &Runtime.processes.queue[index];
-  if (instance->data != nullptr) free(instance->data);
-  if (index != target->length - 1) {
-    target->queue[index] = target->queue[target->length - 1];
-  }
-  target->length--;
-  if (target->length <= target->capacity - 5) {
-    Instance* temp = realloc(target->queue, sizeof(Instance) * (target->capacity - 5));
+void CreateSignal(size_t buf_size) {
+  if (Runtime.Signals.num + 1 > Runtime.Signals.cap) {
+    Signal* temp = realloc(Runtime.Signals.signals, sizeof(Signal) * (Runtime.Signals.cap + PREALLOC_BLOCKSIZE));
     if (!temp) {
       ThrowError(ERROR_MEMALLOC);
-      return -1;
+      return;
     }
-    target->queue = temp;
-    target->capacity -= 5;
+    Runtime.Signals.signals = temp;
+    Runtime.Signals.cap += PREALLOC_BLOCKSIZE;
   }
-  return target->length;
+  Runtime.Signals.signals[Runtime.Signals.num] = (Signal){
+    .subscribers = malloc(sizeof(struct SignalSubscription) * PREALLOC_BLOCKSIZE),
+    .sub_count = 0,
+    .sub_cap = 0,
+    .argument_buf = malloc(buf_size)
+  };
+  Runtime.Signals.num++;
+}
+void DeleteSignal(unsigned signal) {
+  if (signal != Runtime.Signals.num - 1) {
+    Runtime.Signals.signals[signal] = Runtime.Signals.signals[Runtime.Signals.num - 1];
+  }
+  Runtime.Signals.num--;
+  if (Runtime.Signals.num <= Runtime.Signals.cap - PREALLOC_BLOCKSIZE) {
+    Signal* temp = realloc(Runtime.Signals.signals, sizeof(Signal) * (Runtime.Signals.cap - PREALLOC_BLOCKSIZE));
+    if (!temp) {
+      ThrowError(ERROR_MEMALLOC);
+      return;
+    }
+    Runtime.Signals.signals = temp;
+  }
+}
+void ConnectSignal(Method method, void* target, unsigned signal) {
+  Signal* target_signal = &Runtime.Signals.signals[signal];
+  if (target_signal->sub_count + 1 > target_signal->sub_cap) {
+    struct SignalSubscription* temp = realloc(target_signal->subscribers, sizeof(struct SignalSubscription) * (target_signal->sub_cap + PREALLOC_BLOCKSIZE));
+    if (!temp) {
+      ThrowError(ERROR_MEMALLOC);
+      return;
+    }
+    target_signal->subscribers = temp;
+    target_signal->sub_cap += PREALLOC_BLOCKSIZE;
+  }
+  target_signal->subscribers[target_signal->sub_count] = (struct SignalSubscription){
+    .method = method,
+    .target = target
+  };
+  target_signal->sub_count++;
+}
+void DisconnectSignal(void* target, unsigned signal) {
+  Signal* target_signal = &Runtime.Signals.signals[signal];
+  for (unsigned index = 0; index < target_signal->sub_count; index++) {
+    if (target_signal->subscribers[index].target == target) {
+      if (index != target_signal->sub_count - 1) {
+        target_signal->subscribers[index] = target_signal->subscribers[target_signal->sub_count - 1];
+      }
+      target_signal->sub_count--;
+      if (target_signal->sub_count <= target_signal->sub_cap) {
+        struct SignalSubscription* temp = realloc(target_signal->subscribers, sizeof(struct SignalSubscription) * (target_signal->sub_cap - PREALLOC_BLOCKSIZE));
+        if (!temp) {
+          ThrowError(ERROR_MEMALLOC);
+          return;
+        }
+        target_signal->subscribers = temp;
+        target_signal->sub_cap -= PREALLOC_BLOCKSIZE;
+      }
+    }
+  }
+}
+void EmitSignal(unsigned signal) {
+  Signal* target_signal = &Runtime.Signals.signals[signal];
+  for (unsigned index = 0; index < target_signal->sub_count; index++) {
+    target_signal->subscribers[index].method(target_signal->subscribers[index].target, target_signal->argument_buf);
+  }
+}
+void OnProcess(void) {
+  if (IsKeyPressed(KEY_ESCAPE) && IsKeyDown(KEY_LEFT_SHIFT)) {
+    Runtime.should_program_run = false;
+  }
+}
+void OnRedraw(void) {
+  ClearBackground(MELGRAY);
 }
 void OnInit(void) {
   Runtime.super_canvas = (Canvas){
@@ -96,66 +155,36 @@ void OnInit(void) {
     .size = (Vector2){DEFAULTRES_X, DEFAULTRES_Y},
     .resolution = (Vector2){DEFAULTRES_X, DEFAULTRES_Y}
   };
-  Runtime.processes = (CallbackQueue){
-    .queue = malloc(sizeof(Instance) * 5),
-    .capacity = 5,
-    .length = 0
-  };
-  WindowManager.windows = malloc(sizeof(Window) * MAXWINDOWS);
+
+  Runtime.Signals.signals = malloc(sizeof(Signal) * PREALLOC_BLOCKSIZE);
+  Runtime.Signals.num = 0;
+  Runtime.Signals.cap = 5;
+  CreateSignal(sizeof(unsigned)); // SIG_PROCESS
+  CreateSignal(sizeof(unsigned)); // SIG_DRAW
+
   SetConfigFlags(FLAG_MSAA_4X_HINT);
   SetConfigFlags(FLAG_WINDOW_UNDECORATED);
   InitWindow((int)Runtime.super_canvas.size.x, (int)Runtime.super_canvas.size.y, "MelOS Neo");
   SetTargetFPS(Runtime.render_speed);
   LoadRenderTexture((int)Runtime.super_canvas.resolution.x, (int)Runtime.super_canvas.resolution.y);
-}
-// Runs all process callbacks
-void OnProcess(void) {
-  if (IsKeyPressed(KEY_ESCAPE) && IsKeyDown(KEY_LEFT_SHIFT)) Runtime.should_program_run = false;
-  for (int index = 0; index < Runtime.processes.length; index++) {
-    switch (Runtime.processes.queue[index].type) {
-      default:
-        ThrowError(ERROR_INVALIDCLASSTYPE);
-        QueueFree(&Runtime.processes, index);
-    }
-  }
-}
-// Draws all callbacks linked to a certain canvas
-void RedrawCanvas(void) {
-  BeginTextureMode(Runtime.super_canvas.canvas);
-  ClearBackground(MELGRAY);
-  for (int index = 0; index < Runtime.processes.length; index++) {
-    switch (Runtime.processes.queue[index].type) {
-      default:
-        ThrowError(ERROR_INVALIDCLASSTYPE);
-        QueueFree(&Runtime.processes, index);
-    }
-  }
-  EndTextureMode();
+
 }
 // Close the program
 void OnExit(void) {
   UnloadRenderTexture(Runtime.super_canvas.canvas);
   CloseWindow();
 }
-int Instantiate(CallbackQueue *target, enum Classes type, void *data) {
-  if (target->capacity < target->length + 1) {
-    Instance *temp = realloc(target->queue, sizeof(Instance) * (target->capacity + 5));
-    if (!temp) {
-      ThrowError(ERROR_MEMALLOC);
-      return -1;
-    }
-    target->queue = temp;
-    target->capacity += 5;
-  }
-  target->queue[target->length] = (Instance){data, type};
-  target->length++;
-  return target->length - 1;
-}
 int main(void) {
   OnInit();
   while (Runtime.should_program_run) {
     OnProcess();
-    if (Runtime.queue_redraw) RedrawCanvas(); // Run all draw callbacks linked to super_canvas
+    EmitSignal(SIG_PROCESS);
+    if (Runtime.queue_redraw) {
+      BeginTextureMode(Runtime.super_canvas.canvas);
+        OnRedraw();
+        EmitSignal(SIG_DRAW); // Run all draw callbacks linked to super_canvas
+      EndTextureMode();
+    }
     BeginDrawing();
       // Draws the super_canvas onto screen each frame
       DrawTexturePro(
