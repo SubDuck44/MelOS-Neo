@@ -1,201 +1,158 @@
 #include "raylib.h"
+#include <stdint.h>
+
 #include <stdlib.h>
-#define MELGRAY (Color){53, 53, 53, 255}
-#define DEBUG
-#define DEFAULTRES_X 1280.0f
-#define DEFAULTRES_Y 720.0f
-#define MAXWINDOWS 5
-#define MAXTERMINALBUFFER 128
-#define PREALLOC_BLOCKSIZE 5
+#include <string.h>
 
-enum Signals {
-  SIG_PROCESS,
-  SIG_DRAW
+// Defines
+#define SYS_DEF_WND_RES_X 1280
+#define SYS_DEF_WND_RES_Y 720
+#define SYS_WND_TITLE "MelOS Neo"
+#define SYS_DEF_RENDER_SPEED 60
+#define SYS_PREALLOC_NUM 5
+
+// Enums
+enum ExitCodes {
+  ERR = -1,
+  OK = 0
 };
-enum Errors {
-  ERROR_MEMALLOC,
-  ERROR_INVALIDCLASSTYPE
+enum ErrorCodes {
+  ERR_MEMALLOC,
+  ERR_INDEX_OOB,
+  ERR_INVALIDSIZE
 };
 
-typedef void(*Method)(void *data, void* arg_buf);
+// Types
 typedef struct {
-  RenderTexture2D canvas;
-  Vector2 size; // Display size (how large the windows is)
-  Vector2 resolution; // Display resolution (how many pixels are rendered and projected onto the size)
-} Canvas;
-struct SignalSubscription {
-  Method method;
-  void* target;
-};
+  int32_t X;
+  int32_t Y;
+} Vector2i;
 typedef struct {
-  struct SignalSubscription* subscribers;
-  unsigned sub_count;
-  unsigned sub_cap;
-  void* argument_buf;
-} Signal;
+  void* Arr;
+  uint16_t Len;
+  uint16_t Cap;
+  size_t BlockSize;
+} Sys_Queue;
+typedef void(*Method)(Sys_Queue* Owner, uint16_t Index, void* Data);
+typedef struct {
+  Method Update;
+  Method Draw;
+  void* Data;
+} Sys_Window;
 
-struct Runtime {
-  struct {
-    Signal* signals;
-    unsigned num;
-    unsigned cap;
-  } Signals;
-  Canvas super_canvas;
-  bool should_program_run;
-  bool queue_redraw;
-  short render_speed; // How many times a second the super_canvas should be drawn to SCREEN, NOT REDRAW ITS CHILDREN
-} Runtime = {
-  .should_program_run = true,
-  .queue_redraw = true,
-  .render_speed = 30
-};
+// Global system variables
+bool Sys_Run = true;
+RenderTexture2D Sys_Canvas = { 0 };
+Vector2i Sys_WindowRes = { SYS_DEF_WND_RES_X, SYS_DEF_WND_RES_Y };
+Sys_Queue Sys_Windows;
+uint16_t Sys_ActiveWindow = 0;
 
-void ThrowError(const enum Errors type) {
-#ifdef DEBUG
-  switch (type) {
-    case ERROR_MEMALLOC:
-      TraceLog(LOG_FATAL, "Failed to allocate memory");
-      Runtime.should_program_run = false;
-      break;
-    case ERROR_INVALIDCLASSTYPE:
-      TraceLog(LOG_ERROR, "Invalid class type");
-      break;
-    default:
-  }
-#else
-  ;
-#endif
-}
-void CreateSignal(size_t buf_size) {
-  if (Runtime.Signals.num + 1 > Runtime.Signals.cap) {
-    Signal* temp = realloc(Runtime.Signals.signals, sizeof(Signal) * (Runtime.Signals.cap + PREALLOC_BLOCKSIZE));
-    if (!temp) {
-      ThrowError(ERROR_MEMALLOC);
-      return;
-    }
-    Runtime.Signals.signals = temp;
-    Runtime.Signals.cap += PREALLOC_BLOCKSIZE;
-  }
-  Runtime.Signals.signals[Runtime.Signals.num] = (Signal){
-    .subscribers = malloc(sizeof(struct SignalSubscription) * PREALLOC_BLOCKSIZE),
-    .sub_count = 0,
-    .sub_cap = 0,
-    .argument_buf = malloc(buf_size)
+// Global keymap
+int32_t Key_Exit = KEY_ESCAPE;
+int32_t Key_Alt = KEY_LEFT_ALT;
+
+// Sys Functions
+void sys_redrawcanvas(void);
+
+void sys_init(void) {
+  // Window init via RLGL
+  SetConfigFlags(FLAG_MSAA_4X_HINT); // Enable Anti-Aliasing
+  InitWindow(SYS_DEF_WND_RES_X, SYS_DEF_WND_RES_Y, SYS_WND_TITLE);
+  SetTargetFPS(SYS_DEF_RENDER_SPEED);
+  // Sys globals init
+  Sys_Run = true;
+  Sys_Canvas = LoadRenderTexture(SYS_DEF_WND_RES_X, SYS_DEF_WND_RES_Y);
+  Sys_Windows = (Sys_Queue){
+    malloc(sizeof(Sys_Window) * SYS_PREALLOC_NUM),
+    0,
+    5,
+    sizeof(Sys_Window)
   };
-  Runtime.Signals.num++;
+  // Run external init calls
+  sys_redrawcanvas();
 }
-void DeleteSignal(unsigned signal) {
-  if (signal != Runtime.Signals.num - 1) {
-    Runtime.Signals.signals[signal] = Runtime.Signals.signals[Runtime.Signals.num - 1];
-  }
-  Runtime.Signals.num--;
-  if (Runtime.Signals.num <= Runtime.Signals.cap - PREALLOC_BLOCKSIZE) {
-    Signal* temp = realloc(Runtime.Signals.signals, sizeof(Signal) * (Runtime.Signals.cap - PREALLOC_BLOCKSIZE));
-    if (!temp) {
-      ThrowError(ERROR_MEMALLOC);
-      return;
-    }
-    Runtime.Signals.signals = temp;
-  }
-}
-void ConnectSignal(Method method, void* target, unsigned signal) {
-  Signal* target_signal = &Runtime.Signals.signals[signal];
-  if (target_signal->sub_count + 1 > target_signal->sub_cap) {
-    struct SignalSubscription* temp = realloc(target_signal->subscribers, sizeof(struct SignalSubscription) * (target_signal->sub_cap + PREALLOC_BLOCKSIZE));
-    if (!temp) {
-      ThrowError(ERROR_MEMALLOC);
-      return;
-    }
-    target_signal->subscribers = temp;
-    target_signal->sub_cap += PREALLOC_BLOCKSIZE;
-  }
-  target_signal->subscribers[target_signal->sub_count] = (struct SignalSubscription){
-    .method = method,
-    .target = target
-  };
-  target_signal->sub_count++;
-}
-void DisconnectSignal(void* target, unsigned signal) {
-  Signal* target_signal = &Runtime.Signals.signals[signal];
-  for (unsigned index = 0; index < target_signal->sub_count; index++) {
-    if (target_signal->subscribers[index].target == target) {
-      if (index != target_signal->sub_count - 1) {
-        target_signal->subscribers[index] = target_signal->subscribers[target_signal->sub_count - 1];
-      }
-      target_signal->sub_count--;
-      if (target_signal->sub_count <= target_signal->sub_cap) {
-        struct SignalSubscription* temp = realloc(target_signal->subscribers, sizeof(struct SignalSubscription) * (target_signal->sub_cap - PREALLOC_BLOCKSIZE));
-        if (!temp) {
-          ThrowError(ERROR_MEMALLOC);
-          return;
-        }
-        target_signal->subscribers = temp;
-        target_signal->sub_cap -= PREALLOC_BLOCKSIZE;
-      }
-    }
-  }
-}
-void EmitSignal(unsigned signal) {
-  Signal* target_signal = &Runtime.Signals.signals[signal];
-  for (unsigned index = 0; index < target_signal->sub_count; index++) {
-    target_signal->subscribers[index].method(target_signal->subscribers[index].target, target_signal->argument_buf);
-  }
-}
-void OnProcess(void) {
-  if (IsKeyPressed(KEY_ESCAPE) && IsKeyDown(KEY_LEFT_SHIFT)) {
-    Runtime.should_program_run = false;
-  }
-}
-void OnRedraw(void) {
-  ClearBackground(MELGRAY);
-}
-void OnInit(void) {
-  Runtime.super_canvas = (Canvas){
-    .canvas = {0},
-    .size = (Vector2){DEFAULTRES_X, DEFAULTRES_Y},
-    .resolution = (Vector2){DEFAULTRES_X, DEFAULTRES_Y}
-  };
 
-  Runtime.Signals.signals = malloc(sizeof(Signal) * PREALLOC_BLOCKSIZE);
-  Runtime.Signals.num = 0;
-  Runtime.Signals.cap = 5;
-  CreateSignal(sizeof(unsigned)); // SIG_PROCESS
-  CreateSignal(sizeof(unsigned)); // SIG_DRAW
-
-  SetConfigFlags(FLAG_MSAA_4X_HINT);
-  SetConfigFlags(FLAG_WINDOW_UNDECORATED);
-  InitWindow((int)Runtime.super_canvas.size.x, (int)Runtime.super_canvas.size.y, "MelOS Neo");
-  SetTargetFPS(Runtime.render_speed);
-  LoadRenderTexture((int)Runtime.super_canvas.resolution.x, (int)Runtime.super_canvas.resolution.y);
-
-}
-// Close the program
-void OnExit(void) {
-  UnloadRenderTexture(Runtime.super_canvas.canvas);
+void sys_exit(void) {
   CloseWindow();
 }
-int main(void) {
-  OnInit();
-  while (Runtime.should_program_run) {
-    OnProcess();
-    EmitSignal(SIG_PROCESS);
-    if (Runtime.queue_redraw) {
-      BeginTextureMode(Runtime.super_canvas.canvas);
-        OnRedraw();
-        EmitSignal(SIG_DRAW); // Run all draw callbacks linked to super_canvas
-      EndTextureMode();
+
+void sys_redrawcanvas(void) {
+  Sys_Window* target = { nullptr };
+  BeginTextureMode(Sys_Canvas);
+    ClearBackground(BLANK);
+    // Update windows
+    for (uint16_t i = 0; i < Sys_Windows.Len; i++) {
+      target = Sys_Windows.Arr + (Sys_ActiveWindow * Sys_Windows.BlockSize);
+      target->Update(&Sys_Windows, i, target->Data);
     }
-    BeginDrawing();
-      // Draws the super_canvas onto screen each frame
-      DrawTexturePro(
-        Runtime.super_canvas.canvas.texture,
-        (Rectangle){0, 0, Runtime.super_canvas.resolution.x, -Runtime.super_canvas.resolution.y},
-        (Rectangle){0, 0, Runtime.super_canvas.size.x, Runtime.super_canvas.size.y},
-        (Vector2){0.0f, 0.0f},
-        0.0f, WHITE
-      );
-    EndDrawing();
+    // Draw active window
+    if (Sys_ActiveWindow != (uint16_t)-1) {
+      target = Sys_Windows.Arr + (Sys_ActiveWindow * Sys_Windows.BlockSize);
+      target->Draw(&Sys_Windows, Sys_ActiveWindow, target->Data);
+    }
+  EndTextureMode();
+}
+
+void sys_onframe(void) {
+  // Global interrupt checks
+  if (IsKeyPressed(Key_Exit) && IsKeyDown(Key_Alt)) Sys_Run = false;
+  // Draw Main Canvas
+  BeginDrawing();
+    DrawTexturePro(
+      Sys_Canvas.texture,
+      (Rectangle){ 0, 0, (float)Sys_WindowRes.X, (float)-Sys_WindowRes.Y },
+      (Rectangle){ 0, 0, (float)Sys_WindowRes.X, (float)Sys_WindowRes.Y },
+      (Vector2){ 0.0f, 0.0f },
+      0.0f,
+      WHITE
+    );
+  EndDrawing();
+}
+
+void sys_queue_append(Sys_Queue* Target, void* Data, size_t Size) {
+  if (Target->BlockSize != Size) {
+    TraceLog(LOG_ERROR, "%d", ERR_INVALIDSIZE);
+    return;
   }
-  OnExit();
-  return 0;
+  if (Target->Len + 1 > Target->Cap) {
+    void* temp = realloc(Target->Arr, (Target->Cap + SYS_PREALLOC_NUM) * Size);
+    if (!temp) {
+      TraceLog(LOG_FATAL, "%d", ERR_MEMALLOC);
+      return;
+    }
+    Target->Arr = temp;
+    Target->Cap += SYS_PREALLOC_NUM;
+  }
+  memcpy(Target->Arr + (Target->Len + Target->BlockSize), Data, Size);
+  Target->Len++;
+}
+
+void sys_queue_pop(Sys_Queue* Target, uint16_t Index, size_t Size) {
+  if (Target->BlockSize != Size) {
+    TraceLog(LOG_ERROR, "%d", ERR_INVALIDSIZE);
+    return;
+  }
+  if (Index != Target->Len - 1) {
+    memcpy(Target->Arr + (Index * Target->BlockSize), Target->Arr + (Target->Len - 1 * (Target->BlockSize)), Size);
+  }
+  Target->Len--;
+  if (Target->Len < Target->Cap - SYS_PREALLOC_NUM && Target->Cap > SYS_PREALLOC_NUM) {
+    void* temp = realloc(Target->Arr, (Target->Cap - SYS_PREALLOC_NUM) * Target->BlockSize);
+    if (!temp) {
+      TraceLog(LOG_FATAL, "%d", ERR_MEMALLOC);
+      return;
+    }
+    Target->Arr = temp;
+    Target->Cap -= SYS_PREALLOC_NUM;
+  }
+}
+
+// ENTRY POINT
+int32_t main(void) {
+  sys_init();
+  while (Sys_Run) {
+    sys_onframe();
+  }
+  sys_exit();
+  return OK;
 }
