@@ -1,8 +1,4 @@
-#include "raylib.h"
-#include <stdint.h>
-
-#include <stdlib.h>
-#include <string.h>
+#include "main.h"
 
 // Defines
 #define SYS_DEF_WND_RES_X 1280
@@ -11,49 +7,19 @@
 #define SYS_DEF_RENDER_SPEED 60
 #define SYS_PREALLOC_NUM 5
 
-// Enums
-enum ExitCodes {
-  ERR = -1,
-  OK = 0
-};
-enum ErrorCodes {
-  ERR_MEMALLOC,
-  ERR_INDEX_OOB,
-  ERR_INVALIDSIZE
-};
-
-// Types
-typedef struct {
-  int32_t X;
-  int32_t Y;
-} Vector2i;
-typedef struct {
-  void* Arr;
-  uint16_t Len;
-  uint16_t Cap;
-  size_t BlockSize;
-} Sys_Queue;
-typedef void(*Method)(Sys_Queue* Owner, uint16_t Index, void* Data);
-typedef struct {
-  Method Update;
-  Method Draw;
-  void* Data;
-} Sys_Window;
-
 // Global system variables
 bool Sys_Run = true;
 RenderTexture2D Sys_Canvas = { 0 };
 Vector2i Sys_WindowRes = { SYS_DEF_WND_RES_X, SYS_DEF_WND_RES_Y };
-Sys_Queue Sys_Windows;
+Sys_WindowQueue Sys_Windows;
 uint16_t Sys_ActiveWindow = 0;
+Font Sys_Font = {0};
 
 // Global keymap
 int32_t Key_Exit = KEY_ESCAPE;
 int32_t Key_Alt = KEY_LEFT_ALT;
 
 // Sys Functions
-void sys_redrawcanvas(void);
-
 void sys_init(void) {
   // Window init via RLGL
   SetConfigFlags(FLAG_MSAA_4X_HINT); // Enable Anti-Aliasing
@@ -62,12 +28,13 @@ void sys_init(void) {
   // Sys globals init
   Sys_Run = true;
   Sys_Canvas = LoadRenderTexture(SYS_DEF_WND_RES_X, SYS_DEF_WND_RES_Y);
-  Sys_Windows = (Sys_Queue){
+  Sys_Windows = (Sys_WindowQueue){
     malloc(sizeof(Sys_Window) * SYS_PREALLOC_NUM),
     0,
-    5,
-    sizeof(Sys_Window)
+    5
   };
+  Sys_ActiveWindow = (uint16_t)-1;
+  Sys_Font = LoadFont("res/iosevka-regular.ttf");
   // Run external init calls
   sys_redrawcanvas();
 }
@@ -76,19 +43,37 @@ void sys_exit(void) {
   CloseWindow();
 }
 
+void sys_switchwindow(uint16_t Target) {
+  if (Target < 0 || Target >= Sys_Windows.Len) {
+    TraceLog(LOG_ERROR, "%d", ERR_INDEX_OOB);
+    return;
+  }
+  if (Sys_ActiveWindow != (uint16_t)-1) {
+    UnloadRenderTexture(Sys_Windows.Arr[Sys_ActiveWindow].Canvas);
+  }
+  Sys_ActiveWindow = Target;
+  Sys_Windows.Arr[Sys_ActiveWindow].Canvas = LoadRenderTexture((int32_t)Sys_WindowRes.X, (int32_t)Sys_WindowRes.Y);
+}
+
 void sys_redrawcanvas(void) {
-  Sys_Window* target = { nullptr };
   BeginTextureMode(Sys_Canvas);
     ClearBackground(BLANK);
     // Update windows
     for (uint16_t i = 0; i < Sys_Windows.Len; i++) {
-      target = Sys_Windows.Arr + (Sys_ActiveWindow * Sys_Windows.BlockSize);
-      target->Update(&Sys_Windows, i, target->Data);
+      Sys_Windows.Arr[i].Update(i, Sys_Windows.Arr[i].Data);
     }
     // Draw active window
     if (Sys_ActiveWindow != (uint16_t)-1) {
-      target = Sys_Windows.Arr + (Sys_ActiveWindow * Sys_Windows.BlockSize);
-      target->Draw(&Sys_Windows, Sys_ActiveWindow, target->Data);
+      Sys_Window* target = &Sys_Windows.Arr[Sys_ActiveWindow];
+      target->Draw(target->Canvas, Sys_ActiveWindow, target->Data);
+      DrawTexturePro(
+        target->Canvas.texture,
+        (Rectangle){0, 0, (float)target->Canvas.texture.width, (float)target->Canvas.texture.height},
+        (Rectangle){0, 0, (float)Sys_WindowRes.X, (float)Sys_WindowRes.Y},
+        (Vector2){0, 0},
+        0.0f,
+        WHITE
+      );
     }
   EndTextureMode();
 }
@@ -109,41 +94,36 @@ void sys_onframe(void) {
   EndDrawing();
 }
 
-void sys_queue_append(Sys_Queue* Target, void* Data, size_t Size) {
-  if (Target->BlockSize != Size) {
-    TraceLog(LOG_ERROR, "%d", ERR_INVALIDSIZE);
-    return;
-  }
-  if (Target->Len + 1 > Target->Cap) {
-    void* temp = realloc(Target->Arr, (Target->Cap + SYS_PREALLOC_NUM) * Size);
+void sys_window_append(Sys_Window Target) {
+  if (Sys_Windows.Len + 1 > Sys_Windows.Cap) {
+    Sys_Window* temp = realloc(Sys_Windows.Arr, sizeof(Sys_Window * (Sys_Windows.Cap + SYS_PREALLOC_NUM)));
     if (!temp) {
       TraceLog(LOG_FATAL, "%d", ERR_MEMALLOC);
       return;
     }
-    Target->Arr = temp;
-    Target->Cap += SYS_PREALLOC_NUM;
+    Sys_Windows.Arr = temp;
+    Sys_Windows.Cap += SYS_PREALLOC_NUM;
   }
-  memcpy(Target->Arr + (Target->Len + Target->BlockSize), Data, Size);
-  Target->Len++;
+  Sys_Windows.Arr[Sys_Windows.Len] = Target;
+  Sys_Windows.Len++;
 }
 
-void sys_queue_pop(Sys_Queue* Target, uint16_t Index, size_t Size) {
-  if (Target->BlockSize != Size) {
-    TraceLog(LOG_ERROR, "%d", ERR_INVALIDSIZE);
+void sys_window_pop(uint16_t Index) {
+  if (Index < 0 || Index >= Sys_Windows.Len) {
+    TraceLog(LOG_ERROR, "%d", ERR_INDEX_OOB);
     return;
   }
-  if (Index != Target->Len - 1) {
-    memcpy(Target->Arr + (Index * Target->BlockSize), Target->Arr + (Target->Len - 1 * (Target->BlockSize)), Size);
+  if (Index != Sys_Windows.Len - 1) {
+    Sys_Windows.Arr[Index] = Sys_Windows.Arr[Sys_Windows.Len - 1];
   }
-  Target->Len--;
-  if (Target->Len < Target->Cap - SYS_PREALLOC_NUM && Target->Cap > SYS_PREALLOC_NUM) {
-    void* temp = realloc(Target->Arr, (Target->Cap - SYS_PREALLOC_NUM) * Target->BlockSize);
+  Sys_Windows.Len--;
+  if (Sys_Windows.Len <= Sys_Windows.Cap - SYS_PREALLOC_NUM) {
+    Sys_Window* temp = realloc(Sys_Windows.Arr, sizeof(Sys_Window) * (Sys_Windows.Cap - SYS_PREALLOC_NUM));
     if (!temp) {
       TraceLog(LOG_FATAL, "%d", ERR_MEMALLOC);
       return;
     }
-    Target->Arr = temp;
-    Target->Cap -= SYS_PREALLOC_NUM;
+    Sys_Windows.Arr = temp;
   }
 }
 
