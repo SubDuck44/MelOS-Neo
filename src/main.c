@@ -4,7 +4,7 @@
 #define SYS_DEF_WINDOWRESX 1280
 #define SYS_DEF_WINDOWRESY 720
 #define SYS_WINDOWTITLE "MelOS Neo"
-#define SYS_DEF_RENDERSPEED 60
+#define SYS_DEF_RENDERSPEED 30
 #define SYS_DEF_PREALLOCNUM 5
 
 #define ERR_MEMALLOC "Memory allocation failed"
@@ -70,38 +70,41 @@ void sys_exit(void) {
 }
 
 void sys_redrawCanvas(void) {
-  BeginTextureMode(Sys_Canvas);
-    ClearBackground(BLANK);
     if (Sys_WindowManager.window_num == 0) {
-      DrawTexturePro(
-        Sys_Logo,
-        (Rectangle){ 0, 0, 768,  800 },
-        (Rectangle){ (float)Sys_WindowresX / 2, (float)Sys_WindowresY / 2, 200, 200},
-        (Vector2){ 100, 100 },
-        0.0f,
-        WHITE
-      );
-      DrawText(
-        SYS_WINDOWTITLE,
-        (Sys_WindowresX / 2) - (MeasureText(SYS_WINDOWTITLE, 30) / 2),
-        (Sys_WindowresY / 2) + 220,
-        30,
-        WHITE
-      );
+      BeginTextureMode(Sys_Canvas);
+        ClearBackground(BLANK);
+        DrawTexturePro(
+          Sys_Logo,
+          (Rectangle){ 0, 0, 768,  800 },
+          (Rectangle){ (float)Sys_WindowresX / 2, (float)Sys_WindowresY / 2, 200, 200},
+          (Vector2){ 100, 100 },
+          0.0f,
+          WHITE
+        );
+        DrawText(
+          SYS_WINDOWTITLE,
+          (Sys_WindowresX / 2) - (MeasureText(SYS_WINDOWTITLE, 30) / 2),
+          (Sys_WindowresY / 2) + 220,
+          30,
+          WHITE
+        );
+      EndTextureMode();
     } else {
       const Window* target = &Sys_WindowManager.arr[Sys_WindowManager.active_window];
       target->draw(Sys_WindowManager.active_window, target->data, target->canvas);
-      DrawTexturePro(
-      target->canvas.texture,
-      (Rectangle){ 0, 0, target->res_x, -target->res_y },
-      (Rectangle){ 0, 0, Sys_WindowresX * Sys_WindowManager.window_scale, Sys_WindowresY * Sys_WindowManager.window_scale },
-      (Vector2){ (float)Sys_WindowresX / 2, (float)Sys_WindowresY / 2 },
-      0.0f,
-      WHITE
-      );
+      BeginTextureMode(Sys_Canvas);
+        ClearBackground(BLANK);
+        DrawTexturePro(
+        target->canvas.texture,
+        (Rectangle){ 0, 0, target->res_x, -target->res_y },
+        (Rectangle){ 0, 0, Sys_WindowresX * Sys_WindowManager.window_scale, Sys_WindowresY * Sys_WindowManager.window_scale },
+        (Vector2){ 0.0f, 0.0f },
+        0.0f,
+        WHITE
+          );
+      EndTextureMode();
       DrawRectangle(0, 0, Sys_WindowresX, Sys_WindowresY, RED);
     }
-  EndTextureMode();
 }
 
 uint16_t sys_addWindow(Window window) {
