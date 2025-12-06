@@ -1,59 +1,35 @@
-#ifndef TERMINAL_MAIN_H
-#define TERMINAL_MAIN_H
-
-#include "raylib.h"
+#ifndef MELOS_MAIN
+#define MELOS_MAIN
+#pragma once
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+#include "raylib.h"
 
-#pragma once
-
-// Enums
-enum ExitCodes {
-  ERR = -1,
-  OK = 0
-};
-enum ErrorCodes {
-  ERR_MEMALLOC,
-  ERR_INDEX_OOB,
-  ERR_INVALIDSIZE
-};
-
-// Types
 typedef struct {
-  uint32_t X;
-  uint32_t Y;
-} Vector2i;
-typedef void(*Method)(uint16_t Index, void* Data);
-typedef void(*DrawCall)(RenderTexture2D Canvas, uint16_t Index, void* Data);
-typedef struct {
-  Method Update;
-  DrawCall Draw;
-  void* Data;
-  RenderTexture2D Canvas;
-} Sys_Window;
-typedef struct {
-  Sys_Window* Arr;
-  uint16_t Len;
-  uint16_t Cap;
-} Sys_WindowQueue;
+  void(*process)(uint16_t index, const void* data);
+  void(*draw)(uint16_t index, const void* data, RenderTexture2D canvas);
+  void(*kill)(uint16_t index, const void* data);
+  const void* data;
+  RenderTexture2D canvas;
+  uint16_t res_x;
+  uint16_t res_y;
+} Window;
 
-// Global variables
-extern bool Sys_Run;
 extern RenderTexture2D Sys_Canvas;
-extern Vector2i Sys_WindowRes;
-extern Sys_WindowQueue Sys_Windows;
-extern uint16_t Sys_ActiveWindow;
-extern Font Sys_Font;
+extern bool Sys_Run;
+extern uint16_t Sys_WindowresX;
+extern uint16_t Sys_WindowresY;
 
-// Global keymap
-extern int32_t Key_Exit;
-extern int32_t Key_Alt ;
+extern int32_t Input_Exit;
+extern int32_t Input_Alt;
 
-// Sys functions
-void sys_switchwindow(uint16_t Target);
-void sys_redrawcanvas(void);
-void sys_window_append(Sys_Window Target);
-void sys_window_pop(uint16_t Index);
+void sys_init(void);
+void sys_exit(void);
+void sys_redrawCanvas(void);
+void sys_process(void);
+void sys_draw(void);
+uint16_t sys_addWindow(Window window);
+void sys_windowQueueFree(uint16_t index);
+void sys_switchWindow(uint16_t target_index);
 
-#endif //TERMINAL_MAIN_H
+#endif
