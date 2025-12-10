@@ -26,6 +26,8 @@ endif()
 
 add_executable(${PROJECT_NAME} src/main.c
         src/main.h
+        src/mods/mystring.c
+        src/mods/mystring.h
 )
 #set(raylib_VERBOSE 1)
 target_link_libraries(${PROJECT_NAME} raylib)
