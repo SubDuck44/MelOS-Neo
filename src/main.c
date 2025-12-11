@@ -13,7 +13,7 @@ int32_t key_exit = KEY_ESCAPE;
 int32_t key_alt = KEY_LEFT_ALT;
 
 /* SHELL */
-char shell_buffer[50000];
+char* shell_buffer;
 char* shell_lastmessage = (char*)(&(shell_buffer) + 1);
 uint8_t shell_fontsize = 20;
 float shell_spacing = 3;
@@ -65,7 +65,6 @@ void Sys_Draw(void) {
       0.0f,
       WHITE
     );
-    DrawTextEx(sys_font, "hello world!", (Vector2){50, 50}, 20, 3, WHITE);
   EndDrawing();
 }
 
@@ -78,7 +77,7 @@ void Sys_Init(void) {
 
   sys_font = LoadFont("res/iosevka-regular.ttf");
 
-  mstr_memset(shell_buffer, sizeof(shell_buffer) / sizeof(char), '\0');         // Avoid buffer overruns by pre-filling with null
+  shell_buffer = calloc(1 << 20, sizeof(char));
   Shell_Print("Hello World!", sizeof("Hello World!"));
 }
 
