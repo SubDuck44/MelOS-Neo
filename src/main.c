@@ -3,7 +3,7 @@
 /* SYSTEM */
 bool sys_run_flag = true;
 bool sys_redraw_flag = true;
-RenderTexture2D sys_canvas = { 0 };
+RenderTexture2D sys_canvas;
 uint16_t sys_windowres_x = 1920;
 uint16_t sys_windowres_y = 1000;
 Font sys_font;
@@ -13,7 +13,7 @@ int32_t key_exit = KEY_ESCAPE;
 int32_t key_alt = KEY_LEFT_ALT;
 
 /* SHELL */
-char shell_buffer[1048576];
+char shell_buffer[50000];
 char* shell_lastmessage = (char*)(&(shell_buffer) + 1);
 uint8_t shell_fontsize = 20;
 float shell_spacing = 3;
@@ -37,7 +37,7 @@ void Shell_Draw(void) {
       continue;
     }
     DrawTextCodepoint(sys_font, *cur_char, (Vector2){ draw_x, draw_y }, shell_fontsize, WHITE);
-    cur_char--; // TODO: WARNING: YOU *WILL* FUCK EVERYTHING IF YOU DONT IMPLEMENT OVERRUN WRAPPING SOON!!!!!!!
+    cur_char--;                                                                 // TODO: WARNING: YOU *WILL* FUCK EVERYTHING IF YOU DONT IMPLEMENT OVERRUN WRAPPING SOON!!!!!!!
     draw_x += shell_fontsize / 2;
   }
 }
@@ -65,6 +65,7 @@ void Sys_Draw(void) {
       0.0f,
       WHITE
     );
+    DrawTextEx(sys_font, "hello world!", (Vector2){50, 50}, 20, 3, WHITE);
   EndDrawing();
 }
 
@@ -72,13 +73,12 @@ void Sys_Init(void) {
   InitWindow(sys_windowres_x, sys_windowres_y, SYS_TITLE);
   SetTargetFPS(DEF_RENDERSPEED);
   SetWindowPosition(0, 0);
-  ChangeDirectory("..");
 
   sys_canvas = LoadRenderTexture(sys_windowres_x, sys_windowres_y);
 
-  sys_font = LoadFontEx("res/iosevka-regular.ttf", 30, nullptr, 512);
+  sys_font = LoadFont("res/iosevka-regular.ttf");
 
-  mstr_memset(shell_buffer, sizeof(shell_buffer) / sizeof(char), '\0'); // Avoid buffer overruns by pre-filling with null
+  mstr_memset(shell_buffer, sizeof(shell_buffer) / sizeof(char), '\0');         // Avoid buffer overruns by pre-filling with null
   Shell_Print("Hello World!", sizeof("Hello World!"));
 }
 
