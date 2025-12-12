@@ -13,7 +13,7 @@ raylib = dependency('raylib')
 executable(
 	'melosneo',
 	'src/main.c',
-	'src/mods/mystring.c',
+	'src/mods/shell.c',
 	c_args: ['-DGRAPHICS_API_OPENGL_33', '-DPLATFORM_DESKTOP', '-g'],
 	link_args: [],
 	install: true,

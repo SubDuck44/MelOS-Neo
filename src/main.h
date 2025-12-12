@@ -6,19 +6,25 @@
 #include <stdlib.h>
 typedef size_t size_tits;
 #include <stdint.h>
-#include "mods/mystring.h"
+#include <string.h>
 
 #define SYS_TITLE "MelOS Neo"
+#define SYS_EVILBUFFERSIZE 1048575
 #define DEF_RENDERSPEED 60
+#define DEF_FONTSIZE 20
+#define DEF_SPACING 3
 
 extern bool sys_run_flag;
 extern bool sys_redraw_flag;
 extern RenderTexture2D sys_canvas;
 extern uint16_t sys_windowres_x;
 extern uint16_t sys_windowres_y;
+extern Font sys_font;
 
 extern int32_t key_exit;
 extern int32_t key_alt;
+
+extern struct Shell Sys_Shell;
 
 void Sys_RedrawCanvas(void);
 void Sys_Process(void);
