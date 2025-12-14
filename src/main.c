@@ -1,5 +1,6 @@
 #include "main.h"
 #include "mods/shell.h"
+#include <raylib.h>
 
 /* SYSTEM */
 bool sys_run_flag = true;
@@ -14,10 +15,74 @@ int32_t key_exit = KEY_ESCAPE;
 int32_t key_alt = KEY_LEFT_ALT;
 
 struct Shell Sys_Shell;
+struct ProcessQueue Sys_ProcQueue;
+
+void Sys_Abort(const char* error) {
+  TraceLog(LOG_FATAL, error);
+  Sys_QueueFlush(false);
+  sys_run_flag = false;
+}
+
+void Sys_Invoke(Method op, void* args) {
+  if (Sys_ProcQueue.len + 1 > Sys_ProcQueue.cap) {
+    ProcessInstruction* temp = realloc(
+      Sys_ProcQueue.q,
+      sizeof(ProcessInstruction) * (Sys_ProcQueue.len + DEF_PREALLOCSIZE)
+    );
+    if (!temp) {
+      Sys_Abort(ERR_MEMALLOC);
+    }
+    Sys_ProcQueue.q = temp;
+    Sys_ProcQueue.cap += DEF_PREALLOCSIZE;
+    Sys_ProcQueue.cache_timeout = DEF_CACHETIMEOUT;
+  }
+  Sys_ProcQueue.q[Sys_ProcQueue.len] = (ProcessInstruction){
+    op, args
+  };
+  Sys_ProcQueue.len++;
+}
+
+void Sys_QueueFlush(bool clear_cache) {
+  Sys_ProcQueue.len = 0;
+  if (clear_cache) {
+    ProcessInstruction* temp = realloc(
+      Sys_ProcQueue.q,
+      sizeof(ProcessInstruction) * (DEF_PREALLOCSIZE)
+    );
+    if (!temp) {
+      Sys_Abort(ERR_MEMALLOC);
+    }
+    Sys_ProcQueue.q = temp;
+    Sys_ProcQueue.cap -= DEF_PREALLOCSIZE;
+  }
+}
+
+void Sys_QueueExecute(void) {
+  for (uint16_t i = 0; i < Sys_ProcQueue.len; i++) {
+    Sys_ProcQueue.q[i].op(Sys_ProcQueue.q[i].args);
+  }
+  if (Sys_ProcQueue.len <= Sys_ProcQueue.cap - DEF_PREALLOCSIZE) {
+    Sys_ProcQueue.cache_timeout--;
+    if (Sys_ProcQueue.cache_timeout <= 0 && Sys_ProcQueue.cap > DEF_PREALLOCSIZE) {
+      ProcessInstruction* temp = realloc(
+        Sys_ProcQueue.q,
+        sizeof(ProcessInstruction) * (Sys_ProcQueue.cap - DEF_PREALLOCSIZE)
+      );
+      if (!temp) {
+        Sys_Abort(ERR_MEMALLOC);
+      }
+      Sys_ProcQueue.q = temp;
+      Sys_ProcQueue.cap -= DEF_PREALLOCSIZE;
+    }
+  } else {
+    Sys_ProcQueue.cache_timeout = DEF_CACHETIMEOUT;
+  }
+  Sys_ProcQueue.len = 0;
+}
 
 void Sys_RedrawCanvas(void) {
   BeginTextureMode(sys_canvas);
-    ClearBackground(BLANK);
+    ClearBackground(DEF_BACKDROPCOLOR);
     Shell_Draw(&Sys_Shell);
   EndTextureMode();
   sys_redraw_flag = false;
@@ -25,7 +90,8 @@ void Sys_RedrawCanvas(void) {
 
 void Sys_Process(void) {
   if (IsKeyPressed(key_exit) && IsKeyDown(key_alt)) sys_run_flag = false;
-  if (IsKeyPressed(KEY_SPACE)) Shell_Print(&Sys_Shell, "B00B5", 5);
+  Sys_QueueExecute();
+  if (GetKeyPressed()) Shell_OnInput(&Sys_Shell);
 }
 
 void Sys_Draw(void) {
@@ -52,7 +118,13 @@ void Sys_Init(void) {
   sys_font = LoadFont("res/iosevka-regular.ttf");
 
   Sys_Shell = Shell_Construct();
-  Shell_Print(&Sys_Shell, "Hello World!", sizeof("Hello World!"));
+  Sys_ProcQueue = (struct ProcessQueue){
+    .cache_timeout = 0,
+    .cap = DEF_PREALLOCSIZE,
+    .len = 0,
+    .q = malloc(sizeof(ProcessInstruction) * DEF_PREALLOCSIZE)
+  };
+  Shell_Print(&Sys_Shell, "Hello World!", sizeof("Hello World!"), true);
 }
 
 void Sys_Exit(void) {
