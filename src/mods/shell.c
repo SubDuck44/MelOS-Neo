@@ -20,6 +20,7 @@ void Prompt(struct Shell* target) {
 }
 
 void InsertChar(struct Shell* target, const char insert) {
+  TraceLog(LOG_INFO, "%c, %hhu", insert);
   char* cur_char = target->caret;
   while (*cur_char != '\0') {
     cur_char = WrapRingBuffer(target->buffer, cur_char, SYS_EVILBUFFERSIZE);
@@ -31,7 +32,7 @@ void InsertChar(struct Shell* target, const char insert) {
   }
   *target->caret = insert;
   target->caret = WrapRingBuffer(target->buffer, target->caret, SYS_EVILBUFFERSIZE);
-  sys_redraw_flag = true;
+  SHELL_DRAW;
 }
 
 void RemoveChar(struct Shell* target) {
@@ -47,7 +48,7 @@ void RemoveChar(struct Shell* target) {
     *(cur_char - 1) = last_char;
   }
   if (target->caret > target->lastmessage) target->caret--;
-  sys_redraw_flag = true;
+  SHELL_DRAW;
 }
 
 struct Shell Shell_Construct(void) {
@@ -55,9 +56,11 @@ struct Shell Shell_Construct(void) {
     .buffer = malloc(SYS_EVILBUFFERSIZE * sizeof(char)),
     .fontsize = DEF_FONTSIZE,
     .spacing = DEF_SPACING,
+    .window_index = WM_CreateWindow()
   };
   if (!shell.buffer) {
-    Sys_Abort(ERR_MEMALLOC);
+    TraceLog(LOG_FATAL, ERR_MEMALLOC);
+    Sys_Abort();
     return (struct Shell){ 0 };
   }
   memset(shell.buffer, '\0', SYS_EVILBUFFERSIZE);
@@ -96,7 +99,7 @@ void Shell_Print(struct Shell* target, const char* message, size_tits len, bool 
   } else {
     target->caret = nullptr;
   }
-  sys_redraw_flag = true;
+  SHELL_DRAW;
 }
 
 void Shell_Draw(struct Shell* target) {

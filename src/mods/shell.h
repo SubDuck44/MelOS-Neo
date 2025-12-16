@@ -4,6 +4,7 @@
 
 #include "../main.h"
 #define DEF_SHELLINPUTPLACEHOLDER " "
+#define SHELL_DRAW Sys_Invoke(OP_DRAWCALL, (void*)&(struct Op_DrawCall){(Method)Shell_Draw, target, target->window_index});
 
 struct Shell {
   char* buffer;
@@ -12,6 +13,7 @@ struct Shell {
   char* caret;
   uint8_t fontsize;
   float spacing;
+  uint16_t window_index;
 };
 
 struct Shell Shell_Construct(void);
