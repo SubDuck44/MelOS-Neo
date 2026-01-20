@@ -2,10 +2,6 @@
 #include "src/main.h"
 #include <raylib.h>
 
-inline char* WrapRingBuffer(char* base, char* prev, size_tits size) {
-  return (prev + 1 > base + size) ? base : prev + 1;
-}
-
 char* GetNextLine(struct Shell* target, char* src) {
   char* cur_char = src;
   while (*cur_char != '\0') {
@@ -20,7 +16,6 @@ void Prompt(struct Shell* target) {
 }
 
 void InsertChar(struct Shell* target, const char insert) {
-  TraceLog(LOG_INFO, "%c, %hhu", insert);
   char* cur_char = target->caret;
   while (*cur_char != '\0') {
     cur_char = WrapRingBuffer(target->buffer, cur_char, SYS_EVILBUFFERSIZE);
@@ -36,44 +31,39 @@ void InsertChar(struct Shell* target, const char insert) {
 }
 
 void RemoveChar(struct Shell* target) {
-  if (target->caret <= target->lastmessage) return;
-  char* cur_char = target->caret;
-  while (*cur_char != '\0') {
-    cur_char = WrapRingBuffer(target->buffer, cur_char, SYS_EVILBUFFERSIZE);
+	uint16_t msg_ptr = target->caret;
+	while (target->buffer[msg_ptr] != '\0') {
+		target->buffer[msg_ptr] = target->buffer[SHELL_BUFWRAP(msg_ptr, SYS_EVILBUFFERSIZE)];
+		msg_ptr = SHELL_BUFWRAP(msg_ptr, SYS_EVILBUFFERSIZE);
   }
-  while (cur_char > target->caret) {
-    char last_char = *(cur_char - 1);
-    *(cur_char - 1) = *cur_char;
-    cur_char--;
-    *(cur_char - 1) = last_char;
-  }
-  if (target->caret > target->lastmessage) target->caret--;
+	if (target->caret != target->lastmessage) target->caret = SHELL_BUFWRAP(
+			target->caret,
+			SYS_EVILBUFFERSIZE
+		);
   SHELL_DRAW;
 }
 
 struct Shell Shell_Construct(void) {
   struct Shell shell = (struct Shell) {
-    .buffer = malloc(SYS_EVILBUFFERSIZE * sizeof(char)),
+    .buffer = calloc(SYS_EVILBUFFERSIZE, 1),
     .fontsize = DEF_FONTSIZE,
     .spacing = DEF_SPACING,
-    .window_index = WM_CreateWindow()
+    .window_index = WM_CreateWindow(),
+		.lastmessage = 0,
+		.caret = 0
   };
   if (!shell.buffer) {
     TraceLog(LOG_FATAL, ERR_MEMALLOC);
     Sys_Abort();
     return (struct Shell){ 0 };
   }
-  memset(shell.buffer, '\0', SYS_EVILBUFFERSIZE);
-  shell.lastmessage = shell.buffer;
-  shell.focusedmessage = shell.buffer;
-  shell.caret = nullptr;
   return shell;
 }
 
 void Shell_OnInput(struct Shell* target) {
   char char_pressed = GetCharPressed();
   if (IsKeyPressed(KEY_ENTER)) {
-    Shell_Print(target, target->lastmessage, strlen(target->lastmessage), false);
+    Shell_Print(target, &target->buffer[target->lastmessage]);
     Prompt(target);
   } else if (IsKeyPressed(KEY_BACKSPACE)) {
     RemoveChar(target);
@@ -82,43 +72,35 @@ void Shell_OnInput(struct Shell* target) {
   }
 }
 
-void Shell_Print(struct Shell* target, const char* message, size_tits len, bool editable) {
-  char* begin = target->lastmessage;
-  while (*begin != '\0') {
-    begin = WrapRingBuffer(target->buffer, begin, SYS_EVILBUFFERSIZE);
-  }
-  begin = WrapRingBuffer(target->buffer, begin, SYS_EVILBUFFERSIZE);
-  target->lastmessage = begin;
-  for (uintptr_t i = 0; i < len; i++) {
-    *begin = message[i];
-    begin = WrapRingBuffer(target->buffer, begin, SYS_EVILBUFFERSIZE);
-  }
-  *begin = '\0';
-  if (editable) {
-    target->caret = target->lastmessage;
-  } else {
-    target->caret = nullptr;
-  }
+void Shell_Print(struct Shell* target, const char* message) {
+  uint16_t buf_ptr = target->lastmessage;
+	for (uint16_t i = 0; message[i] != '\0'; i++) {
+		target->buffer[buf_ptr] = message[i];
+		buf_ptr = SHELL_BUFWRAP(buf_ptr, SYS_EVILBUFFERSIZE);
+	}
+	buf_ptr = SHELL_BUFWRAP(buf_ptr, SYS_EVILBUFFERSIZE);
+	target->buffer[buf_ptr] = '\0';
+	target->caret = target->lastmessage;
   SHELL_DRAW;
 }
 
 void Shell_Draw(struct Shell* target) {
   uint16_t draw_x = 0;
   uint16_t draw_y = 0;
-  char* cur_char = target->focusedmessage;
-  while (draw_y < sys_windowres_y - target->fontsize) {
+  uint16_t cur_char = target->lastmessage;
+  while (draw_y > 0) {
     if (cur_char == target->caret) {
       DrawRectangle(draw_x, draw_y, target->fontsize / 2, target->fontsize, WHITE);
     }
-    if (*cur_char == '\0' || draw_x > sys_windowres_x) {
-      draw_y += target->fontsize + target->spacing;
+    if (target->buffer[cur_char] == '\0' || draw_x > sys_windowres_x) {
+      draw_y -= target->fontsize + target->spacing;
       draw_x = 0;
     } else {
         DrawTextCodepoint(
-        sys_font, *cur_char, (Vector2){ draw_x, draw_y }, target->fontsize, WHITE
+        sys_font, target->buffer[cur_char], (Vector2){ draw_x, draw_y }, target->fontsize, WHITE
       );
       draw_x += target->fontsize / 2;
     }
-    cur_char = WrapRingBuffer(target->buffer, cur_char, SYS_EVILBUFFERSIZE);
+= cur_char = SHELL_BUFWRAP(cur_char, SYS_EVILBUFFERSIZE);
   }
 }

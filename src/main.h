@@ -9,7 +9,6 @@ typedef size_t size_tits;
 #include <string.h>
 
 #define SYS_TITLE "MelOS Neo"
-#define SYS_EVILBUFFERSIZE 1048575
 #define DEF_RENDERSPEED 60
 #define DEF_FONTSIZE 20
 #define DEF_SPACING 3
